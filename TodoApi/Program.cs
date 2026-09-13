@@ -1,4 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 
 using TodoApi.Dtos;
 using TodoApi.Models;
@@ -15,6 +20,28 @@ builder.Services.AddDbContext<AppDbContext>(options =>
         builder.Configuration.GetConnectionString("DefaultConnection")
 ));
 
+var jwtkey = builder.Configuration["Jwt:Key"];
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtkey))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -24,6 +51,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
 var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 
@@ -111,7 +140,8 @@ todoGroup.MapGet("/", async (AppDbContext db) =>
             t.IsCompleted));
             
     return todos.Count == 0 ? Results.NotFound() : Results.Ok(todoGetDtos);
-});
+})
+.RequireAuthorization();
 
 todoGroup.MapPost("/", async (AppDbContext db, TodoPostDto dto) =>
 {
@@ -120,6 +150,7 @@ todoGroup.MapPost("/", async (AppDbContext db, TodoPostDto dto) =>
 
     var todo = new TodoItem
     {
+        Id = nextId,
         Title = dto.Title,
         IsCompleted = false,
         CreatedAt = DateTime.UtcNow
@@ -131,7 +162,40 @@ todoGroup.MapPost("/", async (AppDbContext db, TodoPostDto dto) =>
     var todoGetDto = new TodoGetDto(todo.Id, todo.Title, todo.IsCompleted);
 
     return Results.Created($"/{todo.Id}", todoGetDto);
-});
+})
+.RequireAuthorization();
+
+#endregion
+
+#region Authentication Endpoints
+
+app.MapPost("/api/login", (LoginDto dto, IConfiguration configuration) =>
+{
+    if (dto.Username != "admin" || dto.Password != "password") return Results.Unauthorized();
+
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, dto.Username)
+    };
+
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]));
+
+    var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+    var token = new JwtSecurityToken(
+        issuer: configuration["Jwt:Issuer"],
+        audience: configuration["Jwt:Audience"],
+        claims: claims,
+        expires: DateTime.UtcNow.AddDays(int.Parse(configuration["Jwt:ExpireDays"])),
+        signingCredentials: credentials
+    );
+
+    var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+
+    return Results.Ok(new { Token = tokenString });
+}).WithTags("Authentication").WithName("Login")
+.Produces<LoginResponseDto>(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status401Unauthorized);
 
 #endregion
 

@@ -33,12 +33,14 @@ builder.Services.AddOpenApi(options =>
     });
 });
 
+builder.Services.AddOpenApi();
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(
         builder.Configuration.GetConnectionString("DefaultConnection")
 ));
 
-var jwtkey = builder.Configuration["Jwt:Key"];
+var jwtKey = builder.Configuration["Jwt:Key"];
 builder.Services
     .AddAuthentication(options =>
     {
@@ -54,7 +56,7 @@ builder.Services
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtkey))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
         };
     });
 
@@ -66,7 +68,10 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-    app.MapScalarApiReference();
+    app.MapScalarApiReference(options =>
+    {
+        options.AddPreferredSecuritySchemes("Bearer");
+    });
 }
 
 app.UseHttpsRedirection();
@@ -75,7 +80,7 @@ app.UseAuthorization();
 
 var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 
-#region In memory Endpoints
+#region In-Memory Endpoints
 
 // var todos = new List<TodoGetDto>
 // {
@@ -152,20 +157,20 @@ todoGroup.MapGet("/", async (AppDbContext db) =>
 {
     var todos = await db.Todos.ToListAsync();
 
-    var todoGetDtos = todos.Select(t => 
-        new TodoGetDto(
-            t.Id, 
-            t.Title, 
-            t.IsCompleted));
-            
-    return todos.Count == 0 ? Results.NotFound() : Results.Ok(todoGetDtos);
+    var todoGetDtos = todos.Select(t =>
+                            new TodoGetDto(
+                                t.Id,
+                                t.Title,
+                                t.IsCompleted));
+
+    return todoGetDtos.Count() == 0 ? Results.NotFound() : Results.Ok(todoGetDtos);
 })
 .RequireAuthorization();
 
 todoGroup.MapPost("/", async (AppDbContext db, TodoPostDto dto) =>
 {
     var lastTodo = await db.Todos.OrderByDescending(t => t.Id).FirstOrDefaultAsync();
-    var nextId = lastTodo is null ? 1 : lastTodo.Id +1;
+    var nextId = lastTodo is null ? 1 : lastTodo.Id + 1;
 
     var todo = new TodoItem
     {
